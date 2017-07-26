@@ -281,8 +281,44 @@ int builtin_cmd(char **argv)   // quit , jobs , bg , fg , &
  */
 void do_bgfg(char **argv)
 {
-    return;
+    char *ID = argv[1] ;
+    if ( ID == NULL ) {
+        printf("%s command requires PID or JID  argument\n", argv[0]) ;
+        return ;
+    }
+    int jid ;
+    struct job_t *job ;
+    pid_t pid ;
+	if( ID[0] == '%') {
+        jid = atoi(&ID[1]) ;
+        job = getjobjid(jobs, jid) ;
+        if(job == NULL){
+            printf("ERROR No such job %s\n", ID ) ;
+            return ;
+        }
+        else{
+            pid = job->pid;
+        }
+    }
+	else {
+        pid = atoi(ID) ;
+        job = getjobpid(jobs, pid) ;
+        if(job == NULL){
+            printf("(%d): No such process\n", pid) ;
+            return ;
+        }
+    }
+	kill(-pid, SIGCONT) ;
+    if(!strcmp("fg", argv[0])) {
+        waitfg(job->pid) ;
+    }
+    else{
+        printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
+    }
+    job->state = !strcmp("fg", argv[0]) ? FG : BG ;
+    return ;
 }
+
 
 /*
  * waitfg - Block until process pid is no longer the foreground process
