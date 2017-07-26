@@ -189,7 +189,7 @@ void eval(char *cmdline)
             addjob(jobs, pid, ((bg == 1) ? BG : FG), cmdline) ;  // 是否在后台执行
             sigprocmask(SIG_UNBLOCK, &now, NULL) ;
             if ( !bg ) {
-                    waitfg(pid) ;
+                    waitfg(pid) ; // 暂时停止目前进程，直到子进程结束
             }
             else  {
                 printf("[%d] (%d) %s", pid2jid(pid), pid, cmdline) ; // jid , pid , command line
@@ -206,7 +206,7 @@ void eval(char *cmdline)
  * argument.  Return true if the user has requested a BG job, false if
  * the user has requested a FG job.
  */
-int parseline(const char *cmdline, char **argv)
+int parseline(const char *cmdline, char **argv) // 分离命令行，判断fg和bg
 {
     static char array[MAXLINE]; /* holds local copy of command line */
     char *buf = array;          /* ptr that traverses command line */
@@ -250,7 +250,7 @@ int parseline(const char *cmdline, char **argv)
 	return 1;
 
     /* should the job run in the background? */
-    if ((bg = (*argv[argc-1] == '&')) != 0) {
+    if (( bg = (*argv[argc-1] ) == '&' )) {
 	argv[--argc] = NULL;
     }
     return bg;
@@ -260,7 +260,7 @@ int parseline(const char *cmdline, char **argv)
  * builtin_cmd - If the user has typed a built-in command then execute
  *    it immediately.
  */
-int builtin_cmd(char **argv)
+int builtin_cmd(char **argv)   // quit , jobs , bg , fg , &
 {
     if ( !strcmp(argv[0] , "quit" ) ){
         exit(0) ;
@@ -272,9 +272,6 @@ int builtin_cmd(char **argv)
     if ( !strncmp(argv[0], "bg", 2) || !strncmp(argv[0], "fg", 2) ) {
         do_bgfg(argv);
         return 1;
-    }
-    if ( !strncmp(argv[0] , "&" , 1) )  {
-        return 1 ;
     }
     return 0 ;    /* not a builtin command */
 }
@@ -292,6 +289,14 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
+    struct job_t* job ;
+    job = getjobpid(jobs,pid) ;
+    if(pid == 0){
+        return ;
+    }
+    if(job != NULL){
+        while(pid==fgpid(jobs)) { }
+    }
     return;
 }
 
@@ -306,8 +311,25 @@ void waitfg(pid_t pid)
  *     available zombie children, but doesn't wait for any other
  *     currently running children to terminate.
  */
-void sigchld_handler(int sig)
+void sigchld_handler(int sig)   // 当子进程结束或变为僵死进程时，向父进程发送信号，回收僵死进程
 {
+ 	int status ;
+    pid_t pid ;
+    while ((pid = waitpid(fgpid(jobs), &status, WNOHANG|WUNTRACED)) > 0) {  // 对于每个前台的进程，如果没有任何子进程停止或终止，立即返回
+        if (WIFSTOPPED(status)){  // 引起返回的子进程当前是被停止的
+            getjobpid(jobs, pid)->state = ST ;
+            int jid = pid2jid(pid) ;
+            printf("Job [%d] (%d) Stopped by signal %d\n", jid, pid, WSTOPSIG(status));
+        }
+        else if (WIFSIGNALED(status)){  // 子进程因为未被捕获的信号终止
+            int jid = pid2jid(pid) ;
+            printf("Job [%d] (%d) Stopped by unkown signal \n", jid, pid );
+            deletejob(jobs, pid) ;
+        }
+        else if (WIFEXITED(status)){ // 子进程调用exit或return正常终止，返回子进程的推出状态
+            deletejob(jobs, pid);
+        }
+    }
     return;
 }
 
@@ -316,8 +338,12 @@ void sigchld_handler(int sig)
  *    user types ctrl-c at the keyboard.  Catch it and send it along
  *    to the foreground job.
  */
-void sigint_handler(int sig)
+void sigint_handler(int sig)          // ctrl-c 停止前台所有进程，一个进程组里只有一个进程
 {
+    pid_t pid = fgpid(jobs) ;
+    if ( pid ) {
+        kill(-pid,sig) ; // 整个进程组发SIGINT
+    }
     return;
 }
 
@@ -326,8 +352,12 @@ void sigint_handler(int sig)
  *     the user types ctrl-z at the keyboard. Catch it and suspend the
  *     foreground job by sending it a SIGTSTP.
  */
-void sigtstp_handler(int sig)
+void sigtstp_handler(int sig)        // ctrl-z 挂起
 {
+    pid_t pid = fgpid(jobs) ;
+    if ( pid ) {
+        kill(-pid,sig) ; // 整个进程组发
+    }
     return;
 }
 
@@ -340,7 +370,7 @@ void sigtstp_handler(int sig)
  **********************************************/
 
 /* clearjob - Clear the entries in a job struct */
-void clearjob(struct job_t *job) {
+void clearjob(struct job_t *job) {   // 清除所有job
     job->pid = 0;
     job->jid = 0;
     job->state = UNDEF;
@@ -348,7 +378,7 @@ void clearjob(struct job_t *job) {
 }
 
 /* initjobs - Initialize the job list */
-void initjobs(struct job_t *jobs) {
+void initjobs(struct job_t *jobs) { // 初始化jobs
     int i;
 
     for (i = 0; i < MAXJOBS; i++)
@@ -356,7 +386,7 @@ void initjobs(struct job_t *jobs) {
 }
 
 /* maxjid - Returns largest allocated job ID */
-int maxjid(struct job_t *jobs)
+int maxjid(struct job_t *jobs)      // 找出最大的job ID
 {
     int i, max=0;
 
@@ -367,7 +397,7 @@ int maxjid(struct job_t *jobs)
 }
 
 /* addjob - Add a job to the job list */
-int addjob(struct job_t *jobs, pid_t pid, int state, char *cmdline)
+int addjob(struct job_t *jobs, pid_t pid, int state, char *cmdline)  // 把job添加入jobs
 {
     int i;
 
@@ -384,16 +414,16 @@ int addjob(struct job_t *jobs, pid_t pid, int state, char *cmdline)
 	    strcpy(jobs[i].cmdline, cmdline);
   	    if(verbose){
 	        printf("Added job [%d] %d %s\n", jobs[i].jid, jobs[i].pid, jobs[i].cmdline);
-            }
+        }
             return 1;
-	}
+	    }
     }
     printf("Tried to create too many jobs\n");
     return 0;
 }
 
 /* deletejob - Delete a job whose PID=pid from the job list */
-int deletejob(struct job_t *jobs, pid_t pid)
+int deletejob(struct job_t *jobs, pid_t pid)    // 删除某个进程的job
 {
     int i;
 
@@ -411,22 +441,18 @@ int deletejob(struct job_t *jobs, pid_t pid)
 }
 
 /* fgpid - Return PID of current foreground job, 0 if no such job */
-pid_t fgpid(struct job_t *jobs) {
-    int i;
-
-    for (i = 0; i < MAXJOBS; i++)
+pid_t fgpid(struct job_t *jobs) {     // 返回最早的前台的job的进程ID
+    for ( int i = 0; i < MAXJOBS; i++)
 	if (jobs[i].state == FG)
 	    return jobs[i].pid;
     return 0;
 }
 
 /* getjobpid  - Find a job (by PID) on the job list */
-struct job_t *getjobpid(struct job_t *jobs, pid_t pid) {
-    int i;
-
+struct job_t *getjobpid(struct job_t *jobs, pid_t pid) { // 找出某一个进程的最早的job ， 返回只想结构体的指针
     if (pid < 1)
 	return NULL;
-    for (i = 0; i < MAXJOBS; i++)
+    for (int i  = 0; i < MAXJOBS; i++)
 	if (jobs[i].pid == pid)
 	    return &jobs[i];
     return NULL;
@@ -435,24 +461,20 @@ struct job_t *getjobpid(struct job_t *jobs, pid_t pid) {
 /* getjobjid  - Find a job (by JID) on the job list */
 struct job_t *getjobjid(struct job_t *jobs, int jid)
 {
-    int i;
-
     if (jid < 1)
 	return NULL;
-    for (i = 0; i < MAXJOBS; i++)
+    for ( int i = 0; i < MAXJOBS; i++) // 在jobs 里找出某一个job
 	if (jobs[i].jid == jid)
 	    return &jobs[i];
     return NULL;
 }
 
 /* pid2jid - Map process ID to job ID */
-int pid2jid(pid_t pid)
+int pid2jid(pid_t pid)  // 找出某一个进程的job ，返回jid
 {
-    int i;
-
     if (pid < 1)
 	return 0;
-    for (i = 0; i < MAXJOBS; i++)
+    for ( int i = 0; i < MAXJOBS; i++)
 	if (jobs[i].pid == pid) {
             return jobs[i].jid;
         }
@@ -460,11 +482,9 @@ int pid2jid(pid_t pid)
 }
 
 /* listjobs - Print the job list */
-void listjobs(struct job_t *jobs)
+void listjobs(struct job_t *jobs)   // 列出jobs
 {
-    int i;
-
-    for (i = 0; i < MAXJOBS; i++) {
+    for ( int i = 0; i < MAXJOBS; i++) {
 	if (jobs[i].pid != 0) {
 	    printf("[%d] (%d) ", jobs[i].jid, jobs[i].pid);
 	    switch (jobs[i].state) {
