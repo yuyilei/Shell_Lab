@@ -118,7 +118,7 @@ int main(int argc, char **argv)
     /* Install the signal handlers */
 
     /* These are the ones you will need to implement */
-    Signal(SIGINT,  sigint_handler);   /* ctrl-c */
+    Signal(SIGINT,  sigint_handler);   /* ctrl-c */   // 给某些信号注册信号处理函数....
     Signal(SIGTSTP, sigtstp_handler);  /* ctrl-z */
     Signal(SIGCHLD, sigchld_handler);  /* Terminated or stopped child */
 
@@ -148,7 +148,6 @@ int main(int argc, char **argv)
 	fflush(stdout);
 	fflush(stdout);
     }
-
     exit(0); /* control never reaches here */
 }
 
@@ -167,20 +166,23 @@ void eval(char *cmdline)
 {
     char *argv[MAXARGS + 1] ;
     int bg = parseline(cmdline, argv) ;
+    if ( argv[0] == NULL ) {
+        return ;   //  没有命令直接返回
+    }
     if( !builtin_cmd(argv) ) {
         pid_t pid ;
         sigset_t now ;
-        sigemptyset( &now ) ;    //
-        sigaddset( &now , SIGCHLD ) ;
+        sigemptyset( &now ) ;    //清空信号set
+        sigaddset( &now , SIGCHLD ) ;  //
         sigprocmask( SIG_BLOCK, &now, NULL ) ;
         pid = fork() ;
-        if( pid  < 0) {
+        if( pid  < 0)  {  //出错
             unix_error("Fork Error!") ;
         }
         else if ( !pid ) {    //child
             sigprocmask(SIG_UNBLOCK, &now, NULL) ;
-            setpgid( pid , 0 ) ; // 讲当前进程设置为进程组
-            if (execve(argv[0], argv, environ) < 0) {  // 有无此命令
+            setpgid( 0 , 0 ) ; // 创建新的进程组，将当前进程加入
+            if (execve(argv[0], argv, environ) < 0) {  // 有无此命令,若有，加载并运行程序
                 printf("%s: Command not found\n", argv[0]) ;
                 exit(1);
                 }
@@ -228,7 +230,6 @@ int parseline(const char *cmdline, char **argv) // 分离命令行，判断fg和
     else {
 	delim = strchr(buf, ' ');
     }
-
     while (delim) {
 	argv[argc++] = buf;
 	*delim = '\0';
@@ -416,7 +417,6 @@ void clearjob(struct job_t *job) {   // 清除所有job
 /* initjobs - Initialize the job list */
 void initjobs(struct job_t *jobs) { // 初始化jobs
     int i;
-
     for (i = 0; i < MAXJOBS; i++)
 	clearjob(&jobs[i]);
 }
@@ -425,7 +425,6 @@ void initjobs(struct job_t *jobs) { // 初始化jobs
 int maxjid(struct job_t *jobs)      // 找出最大的job ID
 {
     int i, max=0;
-
     for (i = 0; i < MAXJOBS; i++)
 	if (jobs[i].jid > max)
 	    max = jobs[i].jid;
@@ -436,10 +435,8 @@ int maxjid(struct job_t *jobs)      // 找出最大的job ID
 int addjob(struct job_t *jobs, pid_t pid, int state, char *cmdline)  // 把job添加入jobs
 {
     int i;
-
     if (pid < 1)
 	return 0;
-
     for (i = 0; i < MAXJOBS; i++) {
 	if (jobs[i].pid == 0) {
 	    jobs[i].pid = pid;
@@ -567,7 +564,7 @@ void usage(void)
  */
 void unix_error(char *msg)
 {
-    fprintf(stdout, "%s: %s\n", msg, strerror(errno));
+    fprintf(stdout, "%s: %s\n", msg, strerror(errno)); //   全局变量errorn表示出了什么错，调用系统函数时
     exit(1);
 }
 
@@ -576,24 +573,24 @@ void unix_error(char *msg)
  */
 void app_error(char *msg)
 {
-    fprintf(stdout, "%s\n", msg);
+    fprintf(stdout, "%s\n", msg); // 调用普通函数
     exit(1);
 }
 
 /*
  * Signal - wrapper for the sigaction function
  */
-handler_t *Signal(int signum, handler_t *handler)
+handler_t *Signal(int signum, handler_t *handler) // 就是sigaction函数的装饰器咯。。。。
 {
     struct sigaction action, old_action;
 
     action.sa_handler = handler;
-    sigemptyset(&action.sa_mask); /* block sigs of type being handled */
+    sigemptyset(&action.sa_mask); /* block sigs of type being handled */ // 初始化信号集合为空
     action.sa_flags = SA_RESTART; /* restart syscalls if possible */
-
+    // sigaction 信号安装处理函数， 将action设置为信号signum的处理函数，将旧的信号处理函数储存到old_action里
     if (sigaction(signum, &action, &old_action) < 0)
 	unix_error("Signal error");
-    return (old_action.sa_handler);
+    return (old_action.sa_handler);  // 为什么返回old_action ？？
 }
 
 /*
