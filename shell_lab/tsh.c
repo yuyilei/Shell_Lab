@@ -185,10 +185,11 @@ void eval(char *cmdline)
             setpgid( 0 , 0 ) ; // 创建新的进程组，将当前进程加入
             if (execve(argv[0], argv, environ) < 0) {  // 有无此命令,若有，加载并运行程序
                 printf("%s: Command not found\n", argv[0]) ;
-                exit(1);
+                exit(0) ;
                 }
             }
         else {
+          //  if (execve(argv[0], argv, environ) < 0) {  return ; }  // 有无此命令,若有，加载并运行程序
             addjob(jobs, pid, ((bg == 1) ? BG : FG), cmdline) ;  // 是否在后台执行
             sigprocmask(SIG_SETMASK, &now, NULL) ;      //  取消父进程中的阻塞
             if ( !bg ) {
@@ -336,7 +337,7 @@ void waitfg(pid_t pid)
         return ;
     }
     if(job != NULL){
-        while(pid==fgpid(jobs)) { }
+        while(pid==fgpid(jobs)) { ; }
     }
     return;
 }
@@ -357,7 +358,7 @@ void sigchld_handler(int sig)   // 当子进程结束或变为僵死进程时，
     int olderrno = errno ;
  	int status ;
     pid_t pid ;
-    while ((pid = waitpid(fgpid(jobs), &status, WNOHANG|WUNTRACED)) > 0) {  // 对于每个前台的进程，如果没有任何子进程停止或终止，立即返回
+    while ((pid = waitpid(-1, &status, WNOHANG|WUNTRACED)) > 0) {  // 对于每个前台的进程，如果没有任何子进程停止或终止，立即返回
         if (WIFSTOPPED(status)){  // 引起返回的子进程当前是被停止的
             getjobpid(jobs, pid)->state = ST ;
             int jid = pid2jid(pid) ;
@@ -370,6 +371,7 @@ void sigchld_handler(int sig)   // 当子进程结束或变为僵死进程时，
         }
         else if (WIFEXITED(status)){ // 子进程调用exit或return正常终止，返回子进程的推出状态
             deletejob(jobs, pid);
+            printf("1\n") ;
         }
     }
     errno = olderrno ;
@@ -386,7 +388,8 @@ void sigint_handler(int sig)          // ctrl-c 停止前台所有进程，一�
     int olderrno = errno ;
     pid_t pid = fgpid(jobs) ;
     if ( pid ) {
-        kill(-pid,SIGINT) ; // 整个进程组发SIGINT
+        kill(-pid,pid) ; // 整个进程组发SIGINT
+        deletejob(jobs,pid) ;
     }
     errno = olderrno ;
     return;
