@@ -164,6 +164,7 @@ int main(int argc, char **argv)
 */
 void eval(char *cmdline)
 {
+    int olderrno = errno ;
     char *argv[MAXARGS + 1] ;
     int bg = parseline(cmdline, argv) ;
     if ( argv[0] == NULL ) {
@@ -173,14 +174,14 @@ void eval(char *cmdline)
         pid_t pid ;
         sigset_t now ;
         sigemptyset( &now ) ;    //清空信号set
-        sigaddset( &now , SIGCHLD ) ;  //
-        sigprocmask( SIG_BLOCK, &now, NULL ) ;
+        sigaddset( &now , SIGCHLD ) ;  // 加入SIGCHID 信号
+        sigprocmask( SIG_BLOCK, &now, NULL ) ; // 阻塞父进程的SIGCHILD信号 。。。。
         pid = fork() ;
         if( pid  < 0)  {  //出错
             unix_error("Fork Error!") ;
         }
         else if ( !pid ) {    //child
-            sigprocmask(SIG_UNBLOCK, &now, NULL) ;
+            sigprocmask(SIG_SETMASK, &now, NULL) ; 　// 子进程继承父进程的阻塞集合，所以要取消阻塞，这样对不。。。。
             setpgid( 0 , 0 ) ; // 创建新的进程组，将当前进程加入
             if (execve(argv[0], argv, environ) < 0) {  // 有无此命令,若有，加载并运行程序
                 printf("%s: Command not found\n", argv[0]) ;
@@ -189,7 +190,7 @@ void eval(char *cmdline)
             }
         else {
             addjob(jobs, pid, ((bg == 1) ? BG : FG), cmdline) ;  // 是否在后台执行
-            sigprocmask(SIG_UNBLOCK, &now, NULL) ;
+            sigprocmask(SIG_SETMASK, &now, NULL) ;      //  取消父进程中的阻塞
             if ( !bg ) {
                     waitfg(pid) ; // 暂时停止目前进程，直到子进程结束
             }
@@ -198,6 +199,7 @@ void eval(char *cmdline)
             }
         }
     }
+    errno = olderrno ;
     return;
 }
 
@@ -210,6 +212,7 @@ void eval(char *cmdline)
  */
 int parseline(const char *cmdline, char **argv) // 分离命令行，判断fg和bg
 {
+    int olderrno = errno ;
     static char array[MAXLINE]; /* holds local copy of command line */
     char *buf = array;          /* ptr that traverses command line */
     char *delim;                /* points to first space delimiter */
@@ -254,6 +257,7 @@ int parseline(const char *cmdline, char **argv) // 分离命令行，判断fg和
     if (( bg = (*argv[argc-1] ) == '&' )) {
 	argv[--argc] = NULL;
     }
+    errno = olderrno ;
     return bg;
 }
 
@@ -350,6 +354,7 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig)   // 当子进程结束或变为僵死进程时，向父进程发送信号，回收僵死进程
 {
+    int olderrno = errno ;
  	int status ;
     pid_t pid ;
     while ((pid = waitpid(fgpid(jobs), &status, WNOHANG|WUNTRACED)) > 0) {  // 对于每个前台的进程，如果没有任何子进程停止或终止，立即返回
@@ -367,6 +372,7 @@ void sigchld_handler(int sig)   // 当子进程结束或变为僵死进程时，
             deletejob(jobs, pid);
         }
     }
+    errno = olderrno ;
     return;
 }
 
@@ -377,10 +383,12 @@ void sigchld_handler(int sig)   // 当子进程结束或变为僵死进程时，
  */
 void sigint_handler(int sig)          // ctrl-c 停止前台所有进程，一个进程组里只有一个进程
 {
+    int olderrno = errno ;
     pid_t pid = fgpid(jobs) ;
     if ( pid ) {
-        kill(-pid,sig) ; // 整个进程组发SIGINT
+        kill(-pid,SIGINT) ; // 整个进程组发SIGINT
     }
+    errno = olderrno ;
     return;
 }
 
@@ -391,10 +399,12 @@ void sigint_handler(int sig)          // ctrl-c 停止前台所有进程，一�
  */
 void sigtstp_handler(int sig)        // ctrl-z 挂起
 {
+    int olderrno = errno ;
     pid_t pid = fgpid(jobs) ;
     if ( pid ) {
         kill(-pid,sig) ; // 整个进程组发
     }
+    errno = olderrno ;
     return;
 }
 
@@ -584,7 +594,7 @@ handler_t *Signal(int signum, handler_t *handler) // 就是sigaction函数的装
 {
     struct sigaction action, old_action;
 
-    action.sa_handler = handler;
+    action.sa_handler = handler;  // 只有这个处理程序正在处理的那种类型的信号被阻塞。。。怎么做到的。。？？
     sigemptyset(&action.sa_mask); /* block sigs of type being handled */ // 初始化信号集合为空
     action.sa_flags = SA_RESTART; /* restart syscalls if possible */
     // sigaction 信号安装处理函数， 将action设置为信号signum的处理函数，将旧的信号处理函数储存到old_action里
